@@ -1,0 +1,994 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FuelTrack — Multi-Branch Analytics</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+
+<!-- Firebase SDK -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, sendPasswordResetEmail, updatePassword } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  import { getFirestore, collection, addDoc, getDocs, query, where, orderBy, onSnapshot, doc, setDoc, getDoc, deleteDoc, updateDoc, Timestamp, limit } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyCmIEbj3dk8E8mZO-EARoOFQpfV2CpNOX8",
+    authDomain: "fueltrack-multibranch.firebaseapp.com",
+    projectId: "fueltrack-multibranch",
+    storageBucket: "fueltrack-multibranch.firebasestorage.app",
+    messagingSenderId: "428236984377",
+    appId: "1:428236984377:web:062fb0e84d3a85d01d7de8",
+    measurementId: "G-8ZNV62P8SZ"
+  };
+
+  // Primary app — used for the logged-in admin session
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  // Secondary app — used ONLY to create new user accounts.
+  // Firebase Auth automatically signs in the newly created user on the
+  // instance that created them. By using a separate app instance, the
+  // primary admin session is never disturbed.
+  const appSecondary = initializeApp(firebaseConfig, 'secondary');
+  const authSecondary = getAuth(appSecondary);
+
+  window._ft = {
+    auth, db,
+    authSecondary,
+    collection, addDoc, getDocs, query, where, orderBy, onSnapshot,
+    doc, setDoc, getDoc, deleteDoc, updateDoc, Timestamp, limit,
+    createUserWithEmailAndPassword, signInWithEmailAndPassword,
+    signOut, onAuthStateChanged, sendPasswordResetEmail,
+    updatePassword   // ← needed for user to change their temp password
+  };
+  window._ftReady = true;
+  document.dispatchEvent(new Event("ftReady"));
+</script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ════════════════════════════════════════ AUTH SCREEN -->
+<div id="authScreen" class="auth-screen">
+  <div class="auth-bg">
+    <div class="auth-blob b1"></div>
+    <div class="auth-blob b2"></div>
+    <div class="auth-blob b3"></div>
+  </div>
+  <div class="auth-card" id="authCard">
+
+    <div class="auth-logo">
+      <div class="logo-icon">⛽</div>
+      <div class="logo-text">
+        <span class="logo-main">FuelTrack</span>
+        <span class="logo-sub">Multi-Branch Analytics</span>
+      </div>
+    </div>
+
+    <!-- AUTH TABS -->
+    <div class="auth-tabs">
+      <button class="auth-tab active" onclick="switchAuthTab('login')">Sign In</button>
+      <button class="auth-tab" onclick="switchAuthTab('signup')">Request Access</button>
+    </div>
+
+    <!-- LOGIN FORM -->
+    <div id="loginForm" class="auth-form">
+      <div class="form-group">
+        <label>Email Address</label>
+        <input type="email" id="loginEmail" placeholder="you@fueltrack.com">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="loginPassword" placeholder="••••••••" onkeydown="if(event.key==='Enter') handleLogin()">
+      </div>
+      <button class="btn-primary full-width" onclick="handleLogin()">
+        <span>Sign In</span> <span class="btn-arrow">→</span>
+      </button>
+      <div class="demo-hint">
+        <p>No Firebase? Use demo mode:</p>
+        <button class="btn-ghost" onclick="enableDemoMode()">Continue with Demo Data</button>
+      </div>
+    </div>
+
+    <!-- SIGNUP / REQUEST ACCESS FORM -->
+    <div id="signupForm" class="auth-form hidden">
+      <div class="pending-info-box">
+        <span class="info-icon">ℹ️</span>
+        <p>Your request will be reviewed by Corporate HQ before you can access the system.</p>
+      </div>
+      <div class="form-group">
+        <label>Full Name *</label>
+        <input type="text" id="signupName" placeholder="John Mensah">
+      </div>
+      <div class="form-group">
+        <label>Email Address *</label>
+        <input type="email" id="signupEmail" placeholder="john@fuelstation.com">
+      </div>
+      <div class="form-group">
+        <label>Branch *</label>
+        <select id="signupBranch">
+          <option value="">— Loading branches… —</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Role Requested *</label>
+        <select id="signupRole">
+          <option value="staff">Staff (Data Entry)</option>
+          <option value="admin">Branch Admin</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Phone / Contact</label>
+        <input type="text" id="signupPhone" placeholder="Optional">
+      </div>
+      <button class="btn-primary full-width" onclick="handleSignupRequest()">
+        <span>Submit Access Request</span> <span class="btn-arrow">→</span>
+      </button>
+    </div>
+
+    <!-- PENDING APPROVAL STATE -->
+    <div id="pendingApprovalForm" class="auth-form hidden">
+      <div class="pending-state">
+        <div class="pending-icon">⏳</div>
+        <h3>Request Under Review</h3>
+        <p>Your access request has been submitted. Corporate HQ will review and approve your account. You'll receive a login link once approved.</p>
+        <button class="btn-ghost" onclick="switchAuthTab('login')">← Back to Sign In</button>
+      </div>
+    </div>
+
+    <!-- REJECTED STATE -->
+    <div id="rejectedForm" class="auth-form hidden">
+      <div class="pending-state rejected">
+        <div class="pending-icon">❌</div>
+        <h3>Request Not Approved</h3>
+        <p id="rejectedReason">Your access request was not approved. Please contact your branch manager.</p>
+        <button class="btn-ghost" onclick="switchAuthTab('signup')">Submit New Request</button>
+      </div>
+    </div>
+
+    <div id="authError" class="auth-error hidden"></div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════ MAIN APP -->
+<div id="appShell" class="hidden">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">
+        <span class="logo-icon-sm">⛽</span>
+        <span>FuelTrack</span>
+      </div>
+      <button class="sidebar-toggle" onclick="toggleSidebar()">☰</button>
+    </div>
+
+    <!-- Branch Switcher (corporate sees all, others see their branch) -->
+    <div class="branch-switcher" id="branchSwitcher">
+      <div class="branch-switcher-label">Viewing Branch</div>
+      <select id="activeBranchSelect" onchange="handleBranchSwitch(this.value)" class="branch-select-input">
+        <option value="all">🏢 All Branches (HQ)</option>
+      </select>
+    </div>
+
+    <nav class="sidebar-nav">
+      <a class="nav-item active" onclick="showPage('dashboard')" data-page="dashboard">
+        <span class="nav-icon">📊</span><span class="nav-label">Dashboard</span>
+      </a>
+      <a class="nav-item" onclick="showPage('analytics')" data-page="analytics">
+        <span class="nav-icon">📈</span><span class="nav-label">Analytics</span>
+      </a>
+      <a class="nav-item no-mgmt" onclick="showPage('sales')" data-page="sales">
+        <span class="nav-icon">📥</span><span class="nav-label">Upload Sales</span>
+      </a>
+      <a class="nav-item" onclick="showPage('reports')" data-page="reports">
+        <span class="nav-icon">📄</span><span class="nav-label">Reports</span>
+      </a>
+      <a class="nav-item corporate-only hidden" onclick="showPage('branches')" data-page="branches">
+        <span class="nav-icon">🏢</span><span class="nav-label">Branches</span>
+        <span class="nav-badge" id="navBranchCount">0</span>
+      </a>
+      <a class="nav-item admin-plus hidden" onclick="showPage('users')" data-page="users">
+        <span class="nav-icon">👥</span><span class="nav-label">Users</span>
+        <span class="nav-badge pending-badge hidden" id="pendingBadge">0</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <div class="user-avatar" id="sidebarAvatar">U</div>
+        <div class="user-info">
+          <span class="user-name" id="sidebarName">User</span>
+          <span class="user-role" id="sidebarRole">Staff</span>
+          <span class="user-branch" id="sidebarBranch"></span>
+        </div>
+      </div>
+      <button class="btn-logout" onclick="handleLogout()" title="Sign Out">⏻</button>
+    </div>
+  </aside>
+
+  <!-- MAIN CONTENT -->
+  <main class="main-content">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="mobile-menu-btn" onclick="toggleSidebar()">☰</button>
+        <div class="page-breadcrumb">
+          <span id="pageTitle">Dashboard</span>
+          <span class="breadcrumb-branch" id="topbarBranch"></span>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="live-indicator"><span class="live-dot"></span> Live</div>
+        <div class="date-display" id="currentDate"></div>
+      </div>
+    </header>
+
+    <!-- ══════════════ PAGE: DASHBOARD -->
+    <section id="page-dashboard" class="page active">
+
+      <!-- HQ Multi-Branch Overview Banner (corporate only) -->
+      <div id="hqOverviewBanner" class="hq-banner hidden">
+        <div class="hq-banner-inner">
+          <span class="hq-banner-title">🏢 Corporate HQ View</span>
+          <span class="hq-banner-sub" id="hqBranchCountLabel">Loading branches…</span>
+        </div>
+        <div class="hq-branch-cards" id="hqBranchCards"></div>
+      </div>
+
+      <!-- Filter Bar -->
+      <div class="filter-bar">
+        <div class="filter-group">
+          <label>Time Period</label>
+          <div class="btn-group">
+            <button class="period-btn" data-period="7">7 Days</button>
+            <button class="period-btn active" data-period="30">30 Days</button>
+            <button class="period-btn" data-period="90">90 Days</button>
+            <button class="period-btn" data-period="alltime">All Time</button>
+            <button class="period-btn" data-period="custom">Custom</button>
+          </div>
+        </div>
+        <div class="filter-group hidden" id="customDateRange">
+          <input type="date" id="dateFrom" onchange="refreshDashboard()">
+          <span style="color:var(--text-muted)">to</span>
+          <input type="date" id="dateTo" onchange="refreshDashboard()">
+        </div>
+        <div class="filter-group">
+          <label>Product</label>
+          <select id="productFilter" onchange="refreshDashboard()">
+            <option value="all">Both Products</option>
+            <option value="pms">PMS (Petrol)</option>
+            <option value="ago">AGO (Diesel)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- KPI Cards — populated dynamically by refreshDashboard() based on product filter -->
+      <div class="kpi-grid" id="kpiGrid"></div>
+
+      <!-- Charts Row 1 -->
+      <div class="charts-grid-2">
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>📈 Actual Sales Trend</h3>
+            <span class="chart-badge">PMS vs AGO</span>
+          </div>
+          <div class="chart-wrap"><canvas id="salesTrendChart"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>⚖️ Daily Variance (G/L)</h3>
+            <span class="chart-badge">Stock Recon</span>
+          </div>
+          <div class="chart-wrap"><canvas id="varianceChart"></canvas></div>
+        </div>
+      </div>
+
+      <!-- Charts Row 2 -->
+      <div class="charts-grid-3">
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>Product Split</h3>
+            <span class="chart-badge">Revenue %</span>
+          </div>
+          <div class="chart-wrap pie-wrap"><canvas id="productPieChart"></canvas></div>
+        </div>
+        <div class="chart-card col-2">
+          <div class="chart-header">
+            <h3>Revenue by Day</h3>
+            <span class="chart-badge">GH₵</span>
+          </div>
+          <div class="chart-wrap"><canvas id="revenueBarChart"></canvas></div>
+        </div>
+      </div>
+
+      <!-- HQ Branch Comparison Chart (corporate only) -->
+      <div id="branchCompareSection" class="hidden">
+        <div class="chart-card mt-16">
+          <div class="chart-header">
+            <h3>🏢 Branch Performance Comparison</h3>
+            <select id="branchCompareMetric" onchange="renderBranchCompare()" style="font-size:.8rem;padding:5px 10px;border-radius:6px;border:1px solid var(--border)">
+              <option value="revenue">Total Revenue</option>
+              <option value="pms">PMS Volume (L)</option>
+              <option value="ago">AGO Volume (L)</option>
+              <option value="variance">Variance (L)</option>
+            </select>
+          </div>
+          <div class="chart-wrap" style="height:280px"><canvas id="branchCompareChart"></canvas></div>
+        </div>
+      </div>
+
+      <!-- Insights -->
+      <div class="insights-card mt-16">
+        <h3>📌 Automatic Insights</h3>
+        <div class="insights-grid" id="insightsGrid">
+          <div class="insight-item">
+            <span class="insight-icon">🏆</span>
+            <div><strong>Best Day (PMS)</strong><p id="insightBestPMS">—</p></div>
+          </div>
+          <div class="insight-item">
+            <span class="insight-icon">🏆</span>
+            <div><strong>Best Day (AGO)</strong><p id="insightBestAGO">—</p></div>
+          </div>
+          <div class="insight-item">
+            <span class="insight-icon">⚖️</span>
+            <div><strong>Variance Alert</strong><p id="insightVariance">—</p></div>
+          </div>
+          <div class="insight-item">
+            <span class="insight-icon">📉</span>
+            <div><strong>Sales Trend</strong><p id="insightTrend">—</p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════════ PAGE: ANALYTICS -->
+    <section id="page-analytics" class="page hidden">
+      <div class="filter-bar">
+        <div class="filter-group">
+          <label>From</label>
+          <input type="date" id="anlFrom" onchange="refreshAnalytics()">
+        </div>
+        <div class="filter-group">
+          <label>To</label>
+          <input type="date" id="anlTo" onchange="refreshAnalytics()">
+        </div>
+        <div class="filter-group">
+          <label>Group By</label>
+          <select id="anlGroupBy" onchange="refreshAnalytics()">
+            <option value="day">Daily</option>
+            <option value="week">Weekly</option>
+            <option value="month">Monthly</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="charts-grid-2">
+        <div class="chart-card">
+          <div class="chart-header"><h3>PMS vs AGO Actual Sales (Litres)</h3></div>
+          <div class="chart-wrap"><canvas id="anlSalesChart"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-header"><h3>Revenue Over Time (GH₵)</h3></div>
+          <div class="chart-wrap"><canvas id="anlRevenueChart"></canvas></div>
+        </div>
+      </div>
+
+      <div class="charts-grid-2 mt-16">
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>PMS Variance (G/L) Over Time</h3>
+            <span class="badge-info">Gain (+) / Loss (−)</span>
+          </div>
+          <div class="chart-wrap"><canvas id="anlPMSVarianceChart"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>AGO Variance (G/L) Over Time</h3>
+            <span class="badge-info">Gain (+) / Loss (−)</span>
+          </div>
+          <div class="chart-wrap"><canvas id="anlAGOVarianceChart"></canvas></div>
+        </div>
+      </div>
+
+      <!-- Variance Summary Table -->
+      <div class="card mt-16">
+        <div class="card-header">
+          <h3>📊 Period Performance Summary</h3>
+          <span class="badge-info" id="anlBranchLabel">All Branches</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Period</th>
+                <th>PMS Sales (L)</th>
+                <th>AGO Sales (L)</th>
+                <th>Total Revenue (GH₵)</th>
+                <th>PMS Variance (L)</th>
+                <th>AGO Variance (L)</th>
+                <th>Growth</th>
+              </tr>
+            </thead>
+            <tbody id="anlTableBody">
+              <tr><td colspan="7" class="empty-row">No data</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════════ PAGE: UPLOAD SALES -->
+    <section id="page-sales" class="page hidden">
+      <div class="page-grid-2">
+
+        <!-- Manual Entry -->
+        <div class="card">
+          <div class="card-header"><h3>✏️ Manual Entry</h3></div>
+          <div class="entry-form">
+            <div class="form-row-2">
+              <div class="form-group">
+                <label>Date *</label>
+                <input type="date" id="entryDate">
+              </div>
+              <div class="form-group">
+                <label>Branch *</label>
+                <select id="entryBranch"></select>
+              </div>
+            </div>
+
+            <div class="product-section">
+              <div class="product-section-header pms-header">🔴 PMS (Petrol)</div>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label>Actual Sales (Litres)</label>
+                  <input type="number" id="entryPMSQty" placeholder="0.00" min="0" step="0.01" oninput="autoCalcEntry()">
+                </div>
+                <div class="form-group">
+                  <label>Price per Litre (GH₵)</label>
+                  <input type="number" id="entryPMSPrice" placeholder="0.00" min="0" step="0.01" oninput="autoCalcEntry()">
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label>Revenue (GH₵)</label>
+                  <input type="number" id="entryPMSRevenue" placeholder="Auto-calculated" step="0.01">
+                </div>
+                <div class="form-group">
+                  <label>Variance G/L (Litres)</label>
+                  <input type="number" id="entryPMSVariance" placeholder="+ gain / - loss" step="0.01">
+                </div>
+              </div>
+            </div>
+
+            <div class="product-section">
+              <div class="product-section-header ago-header">⚫ AGO (Diesel)</div>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label>Actual Sales (Litres)</label>
+                  <input type="number" id="entryAGOQty" placeholder="0.00" min="0" step="0.01" oninput="autoCalcEntry()">
+                </div>
+                <div class="form-group">
+                  <label>Price per Litre (GH₵)</label>
+                  <input type="number" id="entryAGOPrice" placeholder="0.00" min="0" step="0.01" oninput="autoCalcEntry()">
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label>Revenue (GH₵)</label>
+                  <input type="number" id="entryAGORevenue" placeholder="Auto-calculated" step="0.01">
+                </div>
+                <div class="form-group">
+                  <label>Variance G/L (Litres)</label>
+                  <input type="number" id="entryAGOVariance" placeholder="+ gain / - loss" step="0.01">
+                </div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>Notes</label>
+              <input type="text" id="entryNotes" placeholder="Optional notes...">
+            </div>
+            <button class="btn-primary" onclick="submitManualEntry()">Save Entry →</button>
+          </div>
+        </div>
+
+        <!-- Excel Upload -->
+        <div class="card">
+          <div class="card-header"><h3>📤 Upload Daily Sales Excel</h3></div>
+
+          <div class="form-group" style="margin-bottom:14px">
+            <label>Branch for this upload *</label>
+            <select id="uploadBranch"></select>
+          </div>
+
+          <div class="upload-zone" id="uploadZone"
+            ondrop="handleDrop(event)"
+            ondragover="event.preventDefault()"
+            ondragenter="this.classList.add('drag-over')"
+            ondragleave="this.classList.remove('drag-over')"
+            onclick="document.getElementById('fileInput').click()">
+            <div class="upload-icon">📁</div>
+            <p class="upload-text">Drag & drop your Excel file here</p>
+            <p class="upload-sub">Daily Sales workbook (.xlsx / .xls)</p>
+            <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none" onchange="handleFileUpload(event)">
+            <button class="btn-outline" onclick="event.stopPropagation(); document.getElementById('fileInput').click()">Choose File</button>
+          </div>
+
+          <div class="upload-format-info">
+            <p><strong>Reads automatically from:</strong></p>
+            <ul>
+              <li>📋 <strong>Sales reconciliation</strong> sheet → PMS & AGO Actual Sales + Revenue</li>
+              <li>📋 <strong>Stock Recon.</strong> sheet → PMS & AGO Variance (G/L)</li>
+            </ul>
+          </div>
+
+          <div id="uploadPreview" class="upload-preview hidden"></div>
+          <div id="uploadActions" class="upload-action-buttons hidden">
+            <button class="btn-primary" onclick="confirmUpload()">Import Records →</button>
+            <button class="btn-outline" onclick="cancelUpload()">✕ Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent Entries -->
+      <div class="card mt-16">
+        <div class="card-header">
+          <h3>📋 Recent Entries</h3>
+          <div class="card-actions">
+            <input type="text" id="tableSearch" placeholder="Search date / branch..." oninput="filterTable()" class="search-input">
+            <button id="bulkDeleteBtn" class="btn-danger-outline hidden" onclick="openBulkDeleteModal()">🗑 Bulk Delete</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="salesTable">
+            <thead>
+              <tr>
+                <th class="admin-plus-col hidden"><input type="checkbox" id="selectAllRows" onchange="toggleSelectAll(this.checked)" title="Select all"></th>
+                <th>Date</th>
+                <th>Branch</th>
+                <th>PMS Sales (L)</th>
+                <th>PMS Revenue</th>
+                <th>AGO Sales (L)</th>
+                <th>AGO Revenue</th>
+                <th>PMS Var (L)</th>
+                <th>AGO Var (L)</th>
+                <th class="admin-plus-col hidden">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="salesTableBody">
+              <tr><td colspan="10" class="empty-row">No records yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════════ PAGE: REPORTS -->
+    <section id="page-reports" class="page hidden">
+      <div class="reports-grid">
+        <div class="card">
+          <h3>📄 Generate Report</h3>
+          <div class="report-options">
+            <div class="form-group">
+              <label>Report Period</label>
+              <select id="reportPeriod">
+                <option value="7">Last 7 Days</option>
+                <option value="30">Last 30 Days</option>
+                <option value="90">Last 90 Days</option>
+                <option value="custom">Custom Range</option>
+              </select>
+            </div>
+            <div id="reportCustomRange" style="display:none">
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label>From</label><input type="date" id="reportFrom">
+                </div>
+                <div class="form-group">
+                  <label>To</label><input type="date" id="reportTo">
+                </div>
+              </div>
+            </div>
+            <div class="form-group" id="reportBranchGroup">
+              <label>Branch</label>
+              <select id="reportBranch">
+                <option value="all">All Branches</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Product</label>
+              <select id="reportProduct">
+                <option value="all">Both (PMS + AGO)</option>
+                <option value="pms">PMS Only</option>
+                <option value="ago">AGO Only</option>
+              </select>
+            </div>
+            <div class="btn-group-v">
+              <button class="btn-primary" onclick="generatePDF()">⬇ Download PDF Report</button>
+              <button class="btn-outline" onclick="generateExcel()">⬇ Download Excel Report</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>📊 Report Preview</h3>
+          <div id="reportPreview" class="report-preview">
+            <p class="preview-placeholder">Configure options and download to preview</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════════ PAGE: BRANCHES (corporate only) -->
+    <section id="page-branches" class="page hidden">
+      <div class="page-grid-2">
+
+        <!-- Create Branch -->
+        <div class="card">
+          <div class="card-header"><h3>🏢 Create New Branch</h3></div>
+          <div class="entry-form">
+            <div class="form-group">
+              <label>Branch Name *</label>
+              <input type="text" id="branchName" placeholder="e.g. Kumasi Station">
+            </div>
+            <div class="form-row-2">
+              <div class="form-group">
+                <label>Branch Code *</label>
+                <input type="text" id="branchCode" placeholder="e.g. KSI-01" style="text-transform:uppercase">
+              </div>
+              <div class="form-group">
+                <label>Region</label>
+                <select id="branchRegion">
+                  <option>Ashanti</option>
+                  <option>Greater Accra</option>
+                  <option>Brong-Ahafo</option>
+                  <option>Central</option>
+                  <option>Eastern</option>
+                  <option>Western</option>
+                  <option>Northern</option>
+                  <option>Upper East</option>
+                  <option>Upper West</option>
+                  <option>Volta</option>
+                  <option>Oti</option>
+                  <option>Savannah</option>
+                  <option>North East</option>
+                  <option>Bono East</option>
+                  <option>Ahafo</option>
+                  <option>Western North</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Address</label>
+              <input type="text" id="branchAddress" placeholder="Physical address">
+            </div>
+            <div class="form-group">
+              <label>Contact Phone</label>
+              <input type="text" id="branchPhone" placeholder="Branch contact number">
+            </div>
+            <button class="btn-primary" onclick="createBranch()">Create Branch →</button>
+          </div>
+        </div>
+
+        <!-- Branches List -->
+        <div class="card">
+          <div class="card-header">
+            <h3>All Branches</h3>
+            <span class="badge-info" id="branchCountBadge">0 branches</span>
+          </div>
+          <div id="branchesList" class="branches-list">
+            <p class="empty-row">No branches yet. Create the first one.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════════ PAGE: USERS (admin + corporate) -->
+    <section id="page-users" class="page hidden">
+
+      <!-- Pending Approvals -->
+      <div id="pendingApprovalsSection" class="pending-approvals-section hidden">
+        <div class="card pending-card">
+          <div class="card-header">
+            <h3>⏳ Pending Approvals</h3>
+            <div class="card-actions">
+              <span class="badge-pending" id="pendingCountBadge">0 pending</span>
+              <input type="text" id="pendingSearch" placeholder="Search…" oninput="filterPending()" class="search-input" style="width:160px">
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr><th>Name</th><th>Email</th><th>Branch</th><th>Role</th><th>Requested</th><th>Actions</th></tr>
+              </thead>
+              <tbody id="pendingUsersBody">
+                <tr><td colspan="6" class="empty-row">No pending requests</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Active Users -->
+      <div class="card mt-16">
+        <div class="card-header">
+          <h3>👥 Active Users</h3>
+          <div class="card-actions">
+            <input type="text" id="userSearch" placeholder="Search users…" oninput="filterUsers()" class="search-input">
+            <select id="userBranchFilter" onchange="loadUsers()" style="font-size:.82rem">
+              <option value="all">All Branches</option>
+            </select>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr><th>Name</th><th>Email</th><th>Branch</th><th>Role</th><th>Joined</th><th>Status</th><th>Actions</th></tr>
+            </thead>
+            <tbody id="usersTableBody">
+              <tr><td colspan="7" class="empty-row">Loading users…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- TOAST -->
+<div id="toast" class="toast hidden"></div>
+
+<!-- LOADING OVERLAY -->
+<div id="loadingOverlay" class="loading-overlay hidden">
+  <div class="loading-spinner"></div>
+</div>
+
+<!-- APPROVE MODAL -->
+<div id="approveModal" class="modal-overlay hidden" onclick="if(event.target===this)closeModal()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3>✅ Approve Access Request</h3>
+      <button class="modal-close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <p id="approveModalDesc" class="modal-desc"></p>
+    <div class="form-group">
+      <label>Set Temporary Password *</label>
+      <input type="text" id="approvePassword" placeholder="Min. 6 characters">
+    </div>
+    <div class="form-group">
+      <label>Confirm Role</label>
+      <select id="approveRole">
+        <option value="staff">Staff (Data Entry)</option>
+        <option value="admin">Branch Admin</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-primary" onclick="confirmApproval()">Approve & Create Account</button>
+      <button class="btn-outline" onclick="closeModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- REJECT MODAL -->
+<div id="rejectModal" class="modal-overlay hidden" onclick="if(event.target===this)closeModal()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3>❌ Reject Access Request</h3>
+      <button class="modal-close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <p id="rejectModalDesc" class="modal-desc"></p>
+    <div class="form-group">
+      <label>Reason (shown to user)</label>
+      <input type="text" id="rejectReason" placeholder="e.g. No vacancy for this role at this branch">
+    </div>
+    <div class="modal-actions">
+      <button class="btn-danger-full" onclick="confirmRejection()">Reject Request</button>
+      <button class="btn-outline" onclick="closeModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- CHANGE ROLE MODAL -->
+<div id="changeRoleModal" class="modal-overlay hidden" onclick="if(event.target===this)closeModal()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3>🔄 Change User Role</h3>
+      <button class="modal-close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <p id="changeRoleDesc" class="modal-desc"></p>
+    <div class="form-group">
+      <label>New Role</label>
+      <select id="changeRoleSelect">
+        <option value="staff">Staff (Data Entry)</option>
+        <option value="admin">Branch Admin</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-primary" onclick="confirmRoleChange()">Update Role</button>
+      <button class="btn-outline" onclick="closeModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- DELETE USER MODAL -->
+<div id="deleteUserModal" class="modal-overlay hidden" onclick="if(event.target===this)closeModal()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3>🗑 Deactivate User</h3>
+      <button class="modal-close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <p id="deleteUserDesc" class="modal-desc"></p>
+    <div class="modal-warning">⚠️ The user will no longer be able to sign in. This cannot be undone.</div>
+    <div class="modal-actions">
+      <button class="btn-danger-full" onclick="confirmDeleteUser()">Deactivate User</button>
+      <button class="btn-outline" onclick="closeModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- BULK DELETE MODAL -->
+<div id="bulkDeleteModal" class="modal-overlay hidden" onclick="if(event.target===this)closeModal()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3>🗑 Bulk Delete Records</h3>
+      <button class="modal-close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <p id="bulkDeleteDesc" class="modal-desc"></p>
+    <div class="modal-warning">⚠️ This will permanently delete the selected records. This cannot be undone.</div>
+    <div class="modal-actions">
+      <button class="btn-danger-full" onclick="confirmBulkDelete()">Delete Selected Records</button>
+      <button class="btn-outline" onclick="closeModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- DELETE BRANCH MODAL -->
+<div id="deleteBranchModal" class="modal-overlay hidden" onclick="if(event.target===this)closeModal()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3>🗑 Delete Branch</h3>
+      <button class="modal-close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <p id="deleteBranchDesc" class="modal-desc"></p>
+    <div class="modal-warning">⚠️ Deleting this branch will not delete its sales data, but staff will lose branch assignment.</div>
+    <div class="modal-actions">
+      <button class="btn-danger-full" onclick="confirmDeleteBranch()">Delete Branch</button>
+      <button class="btn-outline" onclick="closeModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- GENERIC CONFIRM MODAL -->
+<div id="confirmModal" class="modal-overlay hidden" onclick="if(event.target===this)closeConfirmModal()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3 id="confirmModalTitle">Confirm Action</h3>
+      <button class="modal-close-btn" onclick="closeConfirmModal()">✕</button>
+    </div>
+    <p id="confirmModalDesc" class="modal-desc"></p>
+    <div class="modal-actions">
+      <button class="btn-primary" id="confirmModalOk" onclick="closeConfirmModal()">Confirm</button>
+      <button class="btn-outline" onclick="closeConfirmModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- BRANCH DETAIL MODAL -->
+<div id="branchDetailModal" class="modal-overlay hidden" onclick="if(event.target===this)closeModal()">
+  <div class="modal-card" style="width:560px;max-width:100%">
+    <div class="modal-header">
+      <h3>🏢 <span id="branchDetailName">Branch</span></h3>
+      <button class="modal-close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <div class="branch-detail-grid">
+      <div class="branch-detail-info">
+        <div class="branch-detail-row"><span>Code</span><strong id="branchDetailCode">—</strong></div>
+        <div class="branch-detail-row"><span>Region</span><strong id="branchDetailRegion">—</strong></div>
+        <div class="branch-detail-row"><span>Address</span><strong id="branchDetailAddress">—</strong></div>
+        <div class="branch-detail-row"><span>Phone</span><strong id="branchDetailPhone">—</strong></div>
+        <div class="branch-detail-row"><span>Status</span><strong id="branchDetailStatus">—</strong></div>
+      </div>
+      <div class="branch-detail-stats">
+        <div class="branch-stat-card"><div class="branch-stat-val" id="branchDetailRev">—</div><div class="branch-stat-lbl">Total Revenue</div></div>
+        <div class="branch-stat-card"><div class="branch-stat-val" id="branchDetailPMS">—</div><div class="branch-stat-lbl">PMS Sales</div></div>
+        <div class="branch-stat-card"><div class="branch-stat-val" id="branchDetailAGO">—</div><div class="branch-stat-lbl">AGO Sales</div></div>
+        <div class="branch-stat-card"><div class="branch-stat-val" id="branchDetailRecords">—</div><div class="branch-stat-lbl">Records</div></div>
+      </div>
+    </div>
+    <div style="margin-top:18px">
+      <h4 style="font-size:.85rem;font-weight:700;margin-bottom:10px;color:var(--text-secondary)">ASSIGNED STAFF</h4>
+      <div id="branchDetailStaff" class="branch-detail-staff-list"></div>
+    </div>
+    <div class="modal-actions" style="margin-top:16px">
+      <button class="btn-outline" onclick="closeModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- REASSIGN USER MODAL -->
+<div id="reassignModal" class="modal-overlay hidden" onclick="if(event.target===this)closeModal()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3>↔ Reassign User</h3>
+      <button class="modal-close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <p class="modal-desc">Reassigning: <strong id="reassignUserName"></strong></p>
+    <div class="form-group">
+      <label>Move to Branch</label>
+      <select id="reassignBranchSelect"></select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-primary" onclick="confirmReassign()">Reassign →</button>
+      <button class="btn-outline" onclick="closeModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- DELETE BRANCH MODAL (with keep-staff option) -->
+<div id="deleteBranchModal" class="modal-overlay hidden" onclick="if(event.target===this)closeModal()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3>🗑 Delete Branch</h3>
+      <button class="modal-close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <p class="modal-desc">Delete branch: <strong id="deleteBranchName"></strong></p>
+    <div class="modal-warning">⚠️ All sales records for this branch will be permanently deleted.</div>
+    <div class="form-group" style="margin-top:14px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="deleteBranchKeepStaff" style="width:auto"> Keep staff &amp; admins (reassign to another branch)
+      </label>
+    </div>
+    <div class="form-group" style="margin-top:10px">
+      <label>Reassign staff to</label>
+      <select id="deleteBranchReassignTo">
+        <option value="">— Deactivate (no reassign) —</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-danger-full" onclick="confirmDeleteBranch()">Delete Branch</button>
+      <button class="btn-outline" onclick="closeModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- CHANGE PASSWORD MODAL -->
+<div id="changePasswordModal" class="modal-overlay hidden" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3>🔐 Set Your Password</h3>
+      <button class="modal-close-btn" onclick="document.getElementById('changePasswordModal').classList.add('hidden')">✕</button>
+    </div>
+    <p class="modal-desc">
+      You are currently using a temporary password set by Corporate HQ.
+      Choose a strong personal password below.
+    </p>
+    <div class="form-group">
+      <label>New Password</label>
+      <input type="password" id="cpNew" placeholder="Min 8 chars, 1 uppercase, 1 number"
+        oninput="document.getElementById('cpError').classList.add('hidden')">
+    </div>
+    <div class="form-group">
+      <label>Confirm New Password</label>
+      <input type="password" id="cpConfirm" placeholder="Repeat your new password"
+        onkeydown="if(event.key==='Enter')confirmChangePassword()">
+    </div>
+    <div id="cpError" class="auth-error hidden" style="margin-top:6px"></div>
+    <div class="cp-requirements">
+      Password must be at least <strong>8 characters</strong>, contain at least one <strong>uppercase letter</strong> and one <strong>number</strong>.
+    </div>
+    <div class="modal-actions">
+      <button class="btn-primary" onclick="confirmChangePassword()">Save New Password</button>
+      <button class="btn-outline" onclick="document.getElementById('changePasswordModal').classList.add('hidden')">Later</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
